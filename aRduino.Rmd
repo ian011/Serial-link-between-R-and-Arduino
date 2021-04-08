@@ -1,0 +1,400 @@
+---
+title: 'What we R about when we R about R and Arduino '
+params:
+  eval: no
+output:
+  html_document:
+    code_download: yes
+    df_print: paged
+    highlight: breezedark
+    theme: flatly
+    toc: yes
+    toc_float: yes
+  html_notebook:
+    toc: yes
+  pdf_document:
+    toc: yes
+  word_document:
+    toc: yes
+---
+
+If you have read Haruki Murakami's book: `What I talk about when I talk about Running`, you'll probably be expecting some wise saying just about now 😄. Remaining true to the book, I guess we'll have to get creative, right? So, there's this wise saying that goes like this, `Very few things indeed are really impaRsible`. With the emphasis on the `R` of course, I guess you are getting the gist of our `*wise*` saying 💭.
+
+Anyhow, let's get back to the serious stuff. What could we actually talk about when we talk about R or Arduino, or more interestingly R and Arduino? Frankly speaking, the name `Arduino` has a nice ring to it (selfishly because it starts with an R), and both have a thing for color blue 🤐. 
+
+But that's beside the point. Putting it very simply, [`Arduino`](https://www.arduino.cc/en/Guide/Introduction) is an open-source electronics platform based on easy-to-use hardware (`Arduino Board`) and software (`Arduino IDE`). One can tell the board what to do if one has the correct form of data and a set of instructions for processing the data and performing subsequent operations. The Arduino’s microcontroller is responsible for holding all your compiled code and executing the commands you specify. The Arduino Software (IDE) is easy-to-use. See the getting [started guide](https://www.arduino.cc/en/Guide).
+We couldn't have found better words to summarize what `R` is than with these words found in [Advanced R](https://adv-r.hadley.nz/introduction.html): `Despite its sometimes frustrating quirks, R is, at its heart, an elegant and beautiful language, well tailored for data science.` 💙
+
+With all this said, a fine convergence can be struck between the two: `data`. Consider this very simple example. We want the Arduino board to turn an LED (Light Emitting Diode) on once it receives a `1` and off once it receives a `0`. If one can get a way of sending some data (1 or 0) to the board's microcontroller, then, the set objective will be achieved sooner or later. This will serve as the basis of our post: Exploring the interoperability between R and Arduino by establishing a flow of data between the two and having instructions on the board's microcontroller that execute the commands specified, based on the data received.
+
+How will we achieve this? 🥁 🥁 ... using Arduino's capability to be programmed directly via a serial port (more on this later).
+
+
+# **Before we strap in**
+
+Below is a quick overview of what we'll use to demonstrate the interoperability of R and Arduino:
+
+1. First, we'll send a series of data defining the brightness (in the range 0% - 100%) of 3 LEDs from the Rstudio IDE to the Arduino's serial port.
+
+2. An Arduino script waits until serial data is available, extracts the brightness values for the 3 LEDs, maps them to analog values (0 - 255), instructs the board's microcontroller to write these values to the LEDs and then sends the mapped values (0 - 255) to the Rstudio-Arduino serial interface. 
+
+3. Rstudio will read the values sent from Arduino to the serial. We'll then use these values (in the range 0 - 255) to create a data set for rotating a servo motor and pass these values to the serial interface.
+
+4. Once the Arduino detects there is serial data again, it reads each value (0 - 255) on the serial interface, maps it to an angle rotation value (in the range 0° - 180°), rotates the servo and sends the angle back to the serial interface.
+
+5. Finally, we'll read the motor angles and wrap it off with some ggplot 📈 in Rstudio.
+
+To follow along, you'll need an Arduino IDE and Board (we used the `Arduino UNO` board at the time of writing this), Red, Green and Blue LEDs, a Servo Motor (`SG90`) and Jumper wires, all wrapped up in enthusiasm tinged with some spunk! The hardware components will be connected as shown below:
+
+
+For the [RStudio](https://rstudio.com/products/rstudio/download/#download) part, we'll be requiring libraries in the Tidyverse, the Magrittr package, Plotly package and the Serial package. The [tidyverse](https://www.tidyverse.org) is a collection of R packages designed for data science tasks such as data wrangling and visualization. The [serial](https://cran.r-project.org/web/packages/serial/index.html) package enables reading and writing binary and ASCII data to RS232/RS422/RS485 or any other virtual serial interface of the computer. The [plotly](https://cran.r-project.org/web/packages/plotly/index.html) package creates interactive web graphics from 'ggplot2' graphs. You can have them installed as follows:
+
+
+```
+install.packages(c("tidyverse", "serial", "plotly", "magrittr"))
+
+```
+
+# **Through the serial interface:** 
+
+Time to fire up Rstudio. Let's begin by loading the libraries we've just downloaded.
+
+```{r message=FALSE, warning=FALSE}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(serial)
+  library(plotly)
+  library(magrittr)
+})
+```
+
+To obtain a list of the installed serial interfaces in your computer, simply use the `serial::listPorts` function.
+
+```{r}
+listPorts ()
+```
+Great! Seems we have five serial interfaces at our disposal. More than enough!
+
+
+### **Setting up a serial interface**
+
+Next, we'll create a serial port object called `arduino`, which represents a serial client for communication with the serial port where our board is connected. Among the 5, where is our `Arduino UNO` connected 🤔?
+
+This vital information can be obtained by firing up the `Arduino IDE` navigating to Tools ➢ Serial Port and then selecting the appropriate port as shown in the snippet below:
+
+```{r eval=FALSE, include=FALSE}
+i = 1
+suppressPackageStartupMessages({
+library(knitr)
+library(EBImage)
+})
+
+
+img_files <- list.files(path = "C:/Users/ADMIN/Desktop/Dekut/pps/Senior Year/R_duino/blog_r/blog_r_servo/resources/", full.names = TRUE )
+readImage(img_files[i]) %>% display(method = 'raster')
+```
+
+In our case, the USB serial port was `COM9`. With this info, we should be well on our way to creating a serial interface connection with the board. This is achieved using the `serial::serialConnection` function. The interface parameters are such that the baud rate (specifies the number of bits being transferred per second) is set to `9600`, which is the same value in the Arduino script. Also, we have specified that the transmission ends with a new line and that the transmission is complete if the end of line symbol is the `carriage return cr`.
+
+```{r}
+arduino = serialConnection(
+                           port = "COM9",
+                           mode = "9600,n,8,1" ,
+                           buffering = "none",
+                           newline = TRUE,
+                           eof = "",
+                           translation = "cr",
+                           handshake = "none",
+                           buffersize = 4096
+                           
+                           )
+```
+
+Now that the serial interface is in place, the next step is initialising the interface and keeping it open for later usage such as writing and reading data from it. Once `serial::isOpen` initialises the interface, the Arduino board blinks. This is because the board resets once a serial port is opened to allow the bootloader to receive a new sketch.
+
+`serial::isOpen` tests whether the connection is open or not.
+```{r eval=FALSE}
+open(arduino)
+
+# testing whether the connection is open or not
+isOpen(arduino)
+```
+
+
+### **Writing data from RStudio to the serial interface**
+
+
+At this point, we are all set to write some data to the serial interface. The values we'll be sending to the serial interface are in the range of 0 - 100, expressing the desired percentage of LED brightness. Also, we'll append letter characters `R` `G` `B` to help Arduino distinguish what value is written to what LED. We'll see this in just a moment.
+
+In the meantime, let's just whip up some R script that creates a data set with 3 columns `r` `g` `b` and which appends a letter to their brightness values.
+
+```{r}
+n = 60
+arduino_input <- tibble(
+  r = (sample(1:100, size = n, replace = T) %>%
+                     paste('R', sep = '')),
+  g = (sample(1:100, size = n, replace = T) %>%
+                     paste('G', sep = '')),
+  b = (sample(1:100, size = n, replace = T) %>%
+                     paste('B', sep = ''))
+)
+
+# get a glimpse of the arduino_input
+
+glimpse(arduino_input)
+```
+
+With that brief glance `tibble::glimpse()` has accorded us, we are able to observe that the LED values that will be written to the serial interface are of type `character`. We can blame/thank `paste()` for this, but in retrospect, this is the desired data type for serial communications.
+
+So this is it, in the case of serial communication, the [ASCII](https://www.w3schools.com/charsets/ref_html_ascii.asp) character set is used to represent all the letters, numbers, symbols, and special commands that you might want to send.
+
+
+The chunk below uses `serial::write.serialConnection()` to write the LED values to the serial port row by row.
+
+Now, let's SHIP IT! 
+
+```{r eval=FALSE}
+# good practice to close then open the connection again
+close(arduino)
+open(arduino)
+
+# gives enough time for the board to reset once a serial interface
+# is initiated
+Sys.sleep(2)
+
+
+for (r in seq_len(n)){
+  Sys.sleep(0.1)
+  write.serialConnection(arduino, paste(arduino_input[r,], collapse = ''))
+}
+
+
+```
+
+
+You are probably wondering, `How will character values light up the LEDs?`. Our Arduino script will handle this as shown in the snippet below:
+
+```{r eval=FALSE, echo=FALSE}
+i = i + 1
+img_files <- list.files(path = "C:/Users/ADMIN/Desktop/Dekut/pps/Senior Year/R_duino/blog_r/blog_r_servo/resources/", full.names = TRUE )
+
+readImage(img_files[i]) %>% display(method = 'raster')
+```
+
+The main Arduino program loop waits until serial data is available (`if(Serial.available())`), stores the data on the interface as a character vector (`mychar`) and then runs it through a series of `[switch](https://www.arduino.cc/reference/en/language/structure/control-structure/switchcase/)` statements. In particular, a switch statement compares the value of a variable to the values specified in case statements. When a case statement is found whose value matches that of the variable, the code in that case statement is run.
+
+Let's take an example. For instance, say the character vector sent from RStudio is `94R44G22B`. The first match case is `case '0'...'9':` which is converted to an integer by subtracting the zero-valued character.
+
+$t$, which represents LED brightness in the range `0 - 100`% is first initialised to $0$. The first value to be read will be $9$. Consequently, the value of $t$ becomes:
+
+$t\, = \, 0 \,  \times \, 10 \, + \, ('9'  \, - \, '0') $
+
+$\therefore \, t \, = \, 9$
+
+The second value is a $4$ and which matches the first case. The new value of $t$ becomes:
+
+$t\, = \, 9 \,  \times \, 10 \, + \, ('4'  \, - \, '0') $
+
+$\therefore \, t \, = \, 94$
+
+The next value that is read is an $'R'$ which matches `case 'R'`. In this case, the value of $t \, = \, 94$ is remapped to an analog value in the range $0-255$ that can be used with `analogWrite()` functions. 
+
+For folks wondering why there is need for remapping values that go to the `analogWrite()` function, it's coming right at you.
+So, if we just wanted blink and LED ON and OFF, we would simply send a digital HIGH (5v) or a digital LOW (0v). But what if we want to
+output a voltage other than 0v or 5v, such as varying the brightness of the LED? Well, we can’t—unless we are using a digital-to-analog converter (DAC) integrated circuit.
+
+However, one can get pretty close to generating analog output values by using a trick called `[pulse-width modulation](https://www.arduino.cc/en/Tutorial/Foundations/PWM)` (PWM). Select pins on each Arduino can use the `analogWrite()` command to generate PWM signals that can emulate a pure analog signal when used with certain peripherals. These pins are marked with a ~ on the board. On the Arduino Uno, pins 3, 5, 6, 9, 10, and 11 are PWM pins.
+
+The PWM output is an 8-bit value. In other words, you can write values from $0$ to $2^8 - 1$, or $0$ to $255$. In the case of our LED circuit, mapping the output to 255 will result in full brightness, and 0 will result in the LED turning off, with the brightness varying
+between these two values.
+
+Okay, now back to `case 'R'`! Once an analog value is written to the LED, one interesting instruction follows `Serial.println(rval)`. As you might have guessed, this is Arduino's way of saying: `Write that value to the serial port!`. After this is done, the value of t is set back to 0 and the next input characters are run through the subsequent cases.
+
+### **Roger that!**
+
+Now, let's read the `mapped` values sent to the serial port connection by Arduino. `read.serialConnection()` is put to the test 🤞.
+
+```{r eval=FALSE}
+# reading mapped data sent from Arduino
+data_frm_arduino <- tibble(
+  capture.output(cat(read.serialConnection(arduino,n=0)))
+  ) 
+
+# select the first 9 rows
+data_frm_arduino %>% slice_head(n = 9)
+
+```
+
+Wow! Yeah! We've got our re-mapped data back home 💁
+♀️! 
+Something interesting to note is that `read.serialConnection()` reads the whole buffer at once. Also, the data is in a `long` format since reading takes place per line. This can probably be corrected by playing around with end-of-line characters specified at the `translation` option in `serial::serialConnection` but we'll leave it at that, for now.
+
+Would we be staying true to R and the principles of Tidy data if we left the `data_frm_arduino` data set as it is? Nope! Well then, let's get our wrangling on!
+
+```{r  eval = FALSE}
+data_frm_arduino %<>% tibble(
+  # assigning values to their approriate LED
+  led_names = rep_along(seq_len(nrow(data_frm_arduino)), c('mapped_r','mapped_g','mapped_b'))) %>%
+  # renaming the first column
+  rename("led_val" = 1) %>%
+  group_by(led_names) %>%
+  # adding identifiers as required by pivot_wider
+  mutate(row = row_number()) %>%
+  # creating new columns using 'led_val' values
+  pivot_wider(names_from = led_names, values_from = led_val) %>%
+  # dropping the 'row' column
+  select(-row) %>%
+  # converting all columns to data type integer
+  mutate_all(as.integer)
+
+data_frm_arduino %>% slice_head(n = 10)
+```
+
+A data set showing the initial LED values sent from RStudio to Arduino's serial port and the mapped values sent back would communicate things better. Let's get right at it.
+
+```{r  eval = FALSE}
+combined_data <- as_tibble(
+  # merge the two data sets
+  cbind(arduino_input, data_frm_arduino)) %>%
+  # drop non numeric characters eg R, G, B
+  mutate(across(where(is.character), ~parse_number(.x)), across(where(is.double), as.integer)) %>% 
+  # reorder columns.. dplyr::relocate can do the trick too
+  select(c(1, 4, 2, 5, 3, 6))
+
+combined_data %>% slice_head(n = 10)
+```
+
+
+### **One last trip:** To a servo and back
+
+At this point, we've already sent data from RStudio to Arduino, remapped it, lighted up some LEDs, and sent the remapped data back to the RStudio IDE. That's been an incredible voyage by all means. Let's wrap it with one final adventure: `driving a servo motor`.
+
+So, this is it. From the RStudio IDE's end, we'll create a new dataset from the received remapped values (0-255), append a terminating character, and write these values to the Arduino's serial port.
+
+```{r eval = FALSE}
+# creating a new dataset that selects values in the order:
+# maxmimum of received LED values then minimum of the LED values
+# the maximum the minimum and on and on we go ...
+
+
+row_min <- tibble(min_input = data_frm_arduino %>% apply(1,min)) %>%
+                    # select even rows
+                    filter(row_number() %% 2 == 0)
+
+servo_input <- tibble(servo_in = data_frm_arduino %>% apply(1,max)) 
+                    
+
+# replacing the even rows with a minimum value 
+servo_input[c(1:n)[c(F,T)],] <- row_min
+
+# appending a terminating character
+servo_input %<>% mutate(servo_in = servo_in %>% paste('S', sep = ''))
+```
+
+And off we write the values to the serial interface.
+
+```{r eval = FALSE}
+close(arduino)
+open(arduino)
+Sys.sleep(2)
+for (r in seq_len(n)){
+  Sys.sleep(1)
+  write.serialConnection(arduino, paste(servo_input[r,], collapse = ''))
+ 
+}
+```
+
+The main Arduino program loop waits until serial data is available, extracts the integer value, remaps the value from the range $0 - 255$ to a servo angle $0 - 179$, and the writes this value to the servo. Our stalwart board then prints the mapped angle value to the serial interface. A snippet where this magic happens is as shown:
+
+```{r eval=FALSE}
+i = i + 1
+img_files <- list.files(path = "C:/Users/ADMIN/Desktop/Dekut/pps/Senior Year/R_duino/blog_r/blog_r_servo/resources/", full.names = TRUE )
+
+readImage(img_files[i]) %>% display(method = 'raster')
+```
+
+
+Now, let's get what Arduino echoed back at us and do some wrangling while at it.
+
+```{r eval=FALSE}
+angl_frm_ard <- tibble(
+  # reading mapped angles sent from Arduino
+  capture.output(cat(read.serialConnection(arduino,n=0)))) %>%
+  # renaming first column
+  rename("mapped_servo_angles°" = 1) %>% 
+  mutate_all(as.integer)
+
+# select the first 10 rows
+angl_frm_ard %>% slice_head(n = 10)
+
+############### what we sent vs what we received ##############
+
+combined_angles <- as_tibble(
+  # merge the two data sets
+  cbind(servo_input, angl_frm_ard)) %>%
+  # drop non numeric character S
+  mutate(across(where(is.character), ~parse_number(.x)),
+         across(where(is.double), as.integer))
+
+combined_angles %>%
+  slice_head(n = 10)
+ 
+```
+
+
+
+All's well that ends with an informative visualization. Let's see the sweep made by the servo at each instance of writing angle data.
+
+
+
+
+```{r eval=FALSE}
+theme_set(theme_light())
+
+plot <- angl_frm_ard %>%
+  ggplot(mapping = aes(x = 1:nrow(angl_frm_ard),
+                       y = mapped_servo_angles)) +
+  geom_line() +
+  # smooth line fitted to the data
+  geom_smooth(se = F) +
+  labs(x = "Count", y = "Servo angle", title = "Variation of servo angle at each count instance")+
+  theme(plot.title = element_text(hjust = 0.5))
+
+ggplotly(plot)
+```
+
+
+# **Wrapup**
+
+In this post, we really tried to show the bi-directional flow of data between RStudio IDE and the Arduino. At each instance, the data we sent to the Arduino got transormed, actuated a peripheral and then was echoed back. The data we got back then went through some tidying and wrangling to put it in the right format that would be executed by the Arduino.
+
+We hope this got you up to speed with both Arduino and R, and ignited a genuine interest to explore the amazing things one can do with these two beauties!
+
+We really look forward to exploring, learning and `R`ing more on this topic ... soon.
+
+Thanks for reading!
+
+Be sure to check out great blogs, tutorials and other formats of R resources coming out every day at [RWeekly.org](https://rweekly.org/)!
+
+Till then, 
+
+Happy Learning 👩🏽
+💻 👨
+💻 👨🏾
+💻 👩
+💻 ,
+
+[Ian](https://twitter.com/IanNyaga4) (Co-organizer DekutR Data Science Community)
+[Eric (R_ic)](https://twitter.com/ericntay) (Microsoft Learn Student Ambassador), 
+
+# **Reference Material**
+
+* H. Wickham and G. Grolemund, [*R for Data Science: Visualize, Model, Transform, Tidy, and Import Data*](https://r4ds.had.co.nz/). 2017.
+
+
+
+
+
+
+
+
